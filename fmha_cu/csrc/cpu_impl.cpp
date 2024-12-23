@@ -1,4 +1,7 @@
-#include <torch/torch.h>
+#include <torch/extension.h>
+
+namespace fmha_cu
+{
 
 void softmax_cpu(float* x, int size)
 {
@@ -25,7 +28,6 @@ void softmax_cpu(float* x, int size)
     }
 }
 
-
 void cpu_multihead_attention_fp32(
     float* Q, float* K, float* V, float* O, int batch_size, int n_heads, int seq_len, int head_dim)
 {
@@ -44,14 +46,17 @@ void cpu_multihead_attention_fp32(
             // _Q, _K is (seq_len, head_dim)
             float* _Q = Q + b * stride_b + h * stride_h;
             float* _K = K + b * stride_b + h * stride_h;
-            // _Q @ _K^T is (seq_len, seq_len)
-            float* att = (float*)malloc(seq_len * seq_len * sizeof(float));
+            // _V is (seq_len, head_dim)
+            float* _V = V + b * stride_b + h * stride_h;
+            // _O = att @ V is (seq_len, head_dim)
+            float* _O = O + b * stride_b + h * stride_h;
             // pass 1: calculate query dot key
             // iterate over all timesteps, including the current one
             for (int tq = 0; tq < seq_len; tq++)
             {
+                // _Q @ _K^T is (seq_len, seq_len)
+                float* _att = (float*)malloc(seq_len * sizeof(float));
                 float* q    = _Q + tq * head_dim;
-                float* _att = att + tq * seq_len;
                 for (int tk = 0; tk < seq_len; tk++)
                 {
                     float* k = _K + tk * head_dim;
@@ -67,27 +72,17 @@ void cpu_multihead_attention_fp32(
                 }
                 // softmax the scores to get attention weights, from 0..pos inclusively
                 softmax_cpu(_att, seq_len);
-            }
 
-            // weighted sum of the values, store back into xb
-            // _V is (seq_len, head_dim)
-            float* _V = V + b * stride_b + h * stride_h;
-            // _O = att @ V is (seq_len, head_dim)
-            float* _O = O + b * stride_b + h * stride_h;
-            // memset(_O, 0, seq_len * head_dim * sizeof(float));
-            for (int to = 0; to < seq_len; to++)
-            {
                 // get the attention weight for this timestep
-                float* o    = _O + to * head_dim;
-                float* _att = att + to * seq_len;
-                for (int tv = 0; tv < head_dim; tv++)
+                float* o = _O + tq * head_dim;
+                for (int i = 0; i < head_dim; i++)
                 {
-                    o[tv] = 0.0f;
+                    o[i] = 0.0f;
                     // accumulate the weighted value into xb
-                    for (int i = 0; i < seq_len; i++)
+                    for (int tv = 0; tv < seq_len; tv++)
                     {
-                        float* v = _V + i * head_dim;
-                        o[tv] += _att[i] * v[tv];
+                        float* v = _V + tv * head_dim;
+                        o[i] += _att[tv] * v[i];
                     }
                 }
             }
@@ -95,8 +90,9 @@ void cpu_multihead_attention_fp32(
     }
 }
 
-void cpu_fmha_fp32(torch::Tensor Q, torch::Tensor K, torch::Tensor V, torch::Tensor O)
+at::Tensor cpu_fmha_fp32(const at::Tensor& Q, const at::Tensor& K, const at::Tensor& V)
 {
+    at::Tensor O = torch::empty(Q.sizes(), Q.options());
     cpu_multihead_attention_fp32(Q.data_ptr<float>(),
                                  K.data_ptr<float>(),
                                  V.data_ptr<float>(),
@@ -105,4 +101,22 @@ void cpu_fmha_fp32(torch::Tensor Q, torch::Tensor K, torch::Tensor V, torch::Ten
                                  Q.size(1),
                                  Q.size(2),
                                  Q.size(3));
+    return O;
 }
+
+// Registers _C as a Python extension module.
+PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {}
+
+// Defines the operators
+TORCH_LIBRARY(fmha_cu, m)
+{
+    m.def("fmha(Tensor Q, Tensor K, Tensor V) -> Tensor");
+}
+
+// Registers CUDA implementations for cpu_fmha_fp32
+TORCH_LIBRARY_IMPL(fmha_cu, CPU, m)
+{
+    m.impl("fmha", &cpu_fmha_fp32);
+}
+
+} // namespace fmha_cu
