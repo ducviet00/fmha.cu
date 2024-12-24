@@ -90,7 +90,7 @@ void cpu_multihead_attention_fp32(
     }
 }
 
-at::Tensor cpu_fmha_fp32(const at::Tensor& Q, const at::Tensor& K, const at::Tensor& V)
+at::Tensor cpu_fmha_fp32(const at::Tensor& Q, const at::Tensor& K, const at::Tensor& V, const int64_t op_code)
 {
     at::Tensor O = torch::empty(Q.sizes(), Q.options());
     cpu_multihead_attention_fp32(Q.data_ptr<float>(),
@@ -110,7 +110,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {}
 // Defines the operators
 TORCH_LIBRARY(fmha_cu, m)
 {
-    m.def("fmha(Tensor Q, Tensor K, Tensor V) -> Tensor");
+    m.def("fmha(Tensor Q, Tensor K, Tensor V, int op_code) -> Tensor");
 }
 
 // Registers CUDA implementations for cpu_fmha_fp32

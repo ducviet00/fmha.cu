@@ -24,7 +24,21 @@ def test_multipass_cuda_fp16_correctness():
     K = torch.randn([b, h, s, d], dtype=torch.float16, device="cuda")
     V = torch.randn([b, h, s, d], dtype=torch.float16, device="cuda")
 
-    O_cuda = fmha_cu.ops.fmha(Q, K, V)
+    O_cuda = fmha_cu.ops.fmha(Q, K, V, op_code=0)
+
+    O_ref = F.scaled_dot_product_attention(Q, K, V)
+
+    torch.testing.assert_close(O_cuda, O_ref, atol=5e-4, rtol=0)
+
+
+def test_twopass_cuda_fp16_correctness():
+    b, h, s, d = 2, 24, 3229, 64
+
+    Q = torch.randn([b, h, s, d], dtype=torch.float16, device="cuda")
+    K = torch.randn([b, h, s, d], dtype=torch.float16, device="cuda")
+    V = torch.randn([b, h, s, d], dtype=torch.float16, device="cuda")
+
+    O_cuda = fmha_cu.ops.fmha(Q, K, V, op_code=1)
 
     O_ref = F.scaled_dot_product_attention(Q, K, V)
 
